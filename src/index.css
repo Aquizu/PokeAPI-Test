@@ -2,7 +2,4 @@
 
 @import './styles/reset.css';
 
-/* Components styles */
 
-@import './components/navbar/index.css';
-@import './components/CartWidget/Index.css';
