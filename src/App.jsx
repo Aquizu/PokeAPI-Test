@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import Logo from '../src/assets/pokeapi_256.png';
 import './App.css'
 
@@ -30,63 +30,98 @@ function App() {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedPokemon, setSelectedPokemon] = useState(null);
   const [selectedTypes, setSelectedTypes] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [loadingDetails, setLoadingDetails] = useState(false);
+  const [pokemonDetails, setPokemonDetails] = useState({});
+  const cache = new Map();
+
+  const getPokemonDetails = useCallback(async (pokemon) => {
+    if (cache.has(pokemon.name)) {
+      return cache.get(pokemon.name);
+    }
+
+    try {
+      const [pokeRes, speciesRes] = await Promise.all([
+        fetch(pokemon.url),
+        fetch(pokemon.url.replace('/pokemon/', '/pokemon-species/'))
+      ]);
+      
+      const [poke, species] = await Promise.all([
+        pokeRes.json(),
+        speciesRes.json()
+      ]);
+      
+      const description = species.flavor_text_entries.find(entry => entry.language.name === 'en')?.flavor_text || 'Sin descripción';
+      
+      let evolutionChain = [];
+      if (species.evolution_chain) {
+        const evolutionRes = await fetch(species.evolution_chain.url);
+        const evolution = await evolutionRes.json();
+        
+        const getEvolutions = async (chain) => {
+          const pokemonRes = await fetch(`https://pokeapi.co/api/v2/pokemon/${chain.species.name}`);
+          const pokemonData = await pokemonRes.json();
+          evolutionChain.push({
+            name: chain.species.name,
+            img: pokemonData.sprites.other.dream_world.front_default || pokemonData.sprites.front_default
+          });
+          if (chain.evolves_to.length > 0) {
+            for (const next of chain.evolves_to) {
+              await getEvolutions(next);
+            }
+          }
+        };
+        await getEvolutions(evolution.chain);
+      }
+      
+      const details = {
+        id: poke.id,
+        name: poke.name,
+        img: poke.sprites.other.dream_world.front_default,
+        type: poke.types,
+        height: poke.height,
+        weight: poke.weight,
+        stats: poke.stats,
+        description: description.replace(/\f/g, ' '),
+        evolutionChain: evolutionChain,
+      };
+      
+      cache.set(pokemon.name, details);
+      return details;
+    } catch (error) {
+      console.error('Error fetching pokemon details:', error);
+      return null;
+    }
+  }, []);
 
   useEffect(() => {
     const getPokemons = async () => {
-      const res = await fetch("https://pokeapi.co/api/v2/pokemon?limit=151&offset=0");
-      const listPokemons = await res.json();
-      const { results } = listPokemons;
-      
-      const newPokemons = results.map(async (pokemon) => {
-        const res = await fetch(pokemon.url);
-        const poke = await res.json();
+      setLoading(true);
+      try {
+        const res = await fetch("https://pokeapi.co/api/v2/pokemon?limit=151&offset=0");
+        const listPokemons = await res.json();
+        const { results } = listPokemons;
         
-        // Obtener descripción y cadena evolutiva
-        const speciesRes = await fetch(poke.species.url);
-        const species = await speciesRes.json();
-        
-        // Obtener descripción en inglés
-        const description = species.flavor_text_entries.find(entry => entry.language.name === 'en')?.flavor_text || 'Sin descripción';
-        
-        // Obtener cadena evolutiva
-        let evolutionChain = [];
-        if (species.evolution_chain) {
-          const evolutionRes = await fetch(species.evolution_chain.url);
-          const evolution = await evolutionRes.json();
-          
-          const getEvolutions = async (chain) => {
-            const pokemonRes = await fetch(`https://pokeapi.co/api/v2/pokemon/${chain.species.name}`);
-            const pokemonData = await pokemonRes.json();
-            evolutionChain.push({
-              name: chain.species.name,
-              img: pokemonData.sprites.other.dream_world.front_default || pokemonData.sprites.front_default
-            });
-            if (chain.evolves_to.length > 0) {
-              for (const next of chain.evolves_to) {
-                await getEvolutions(next);
-              }
-            }
+        const pokemonsWithTypes = await Promise.all(results.map(async (pokemon) => {
+          const res = await fetch(pokemon.url);
+          const poke = await res.json();
+          return {
+            name: pokemon.name,
+            url: pokemon.url,
+            id: parseInt(pokemon.url.split('/').slice(-2, -1)[0]),
+            types: poke.types
           };
-          await getEvolutions(evolution.chain);
-        }
+        }));
         
-        return {
-          id: poke.id,
-          name: poke.name,
-          img: poke.sprites.other.dream_world.front_default,
-          type: poke.types,
-          height: poke.height,
-          weight: poke.weight,
-          stats: poke.stats,
-          description: description.replace(/\f/g, ' '),
-          evolutionChain: evolutionChain,
-        };
-      })
-      
-      setPokemons(await Promise.all(newPokemons));
-    }
+        setPokemons(pokemonsWithTypes);
+      } catch (error) {
+        console.error('Error fetching pokemons:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
 
-    getPokemons()
+    getPokemons();
   }, []);
 
   // Función para manejar la selección de tipos
@@ -101,8 +136,24 @@ function App() {
     });
   };
 
+  const handlePokemonClick = async (pokemon) => {
+    setSelectedPokemon(pokemon);
+    
+    if (!pokemonDetails[pokemon.name]) {
+      setLoadingDetails(true);
+      const details = await getPokemonDetails(pokemon);
+      if (details) {
+        setPokemonDetails(prev => ({
+          ...prev,
+          [pokemon.name]: details
+        }));
+      }
+      setLoadingDetails(false);
+    }
+  };
+
   // Obtener todos los tipos únicos
-  const allTypes = [...new Set(pokemons.flatMap(p => p.type.map(t => t.type.name)))].sort();
+  const allTypes = [...new Set(pokemons.flatMap(p => p.types?.map(t => t.type.name) || []))].sort();
 
   return (
     <div className='pokemon-background flex flex-col justify-center items-center'>
@@ -131,27 +182,37 @@ function App() {
           </button>
         ))}
       </div>
-      <div className='grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 flex-wrap text-center justify-center'>
-      {pokemons.filter(pokemon => {
-        const matchesSearch = pokemon.name.toLowerCase().includes(searchTerm.toLowerCase());
-        const matchesTypes = selectedTypes.length === 0 || selectedTypes.every(selectedType => pokemon.type.some(t => t.type.name === selectedType));
-        return matchesSearch && matchesTypes;
-      }).map(pokemon =>
-        <div className='border border-black bg-slate-300 my-9 mx-2 p-4 w-48 relative rounded-lg min-w-[250px] cursor-pointer hover:shadow-lg transition-shadow'
-          key={pokemon.id}
-          onClick={() => setSelectedPokemon(pokemon)}
-          >
-          <img className='size-24 absolute left-0 right-0 bottom-0 top-[-70px] mx-auto'
-            src={pokemon.img} alt={pokemon.name} />
-          <div className='flex flex-col justify-center items-center mt-5'>
-            <span>#{String(pokemon.id).padStart(2, '0')} - {pokemon.name.toUpperCase()}</span>
-            <div className='flex flex-row gap-2 mt-2'>
-              <span className={`type-badge ${typeColors[pokemon.type[0].type.name]} text-white px-3 py-1 rounded-lg text-sm font-semibold uppercase border border-black shadow-sm`}>{pokemon.type[0].type.name}</span>
-              {pokemon.type[1] && <span className={`type-badge ${typeColors[pokemon.type[1].type.name]} text-white px-3 py-1 rounded-lg text-sm font-semibold uppercase border border-black shadow-sm`}>{pokemon.type[1].type.name}</span>}
+      {loading ? (
+        <div className='flex justify-center items-center h-64'>
+          <div className='text-xl font-semibold'>Cargando Pokémon...</div>
+        </div>
+      ) : (
+        <div className='grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 flex-wrap text-center justify-center'>
+        {pokemons.filter(pokemon => {
+          const matchesSearch = pokemon.name.toLowerCase().includes(searchTerm.toLowerCase());
+          const matchesTypes = selectedTypes.length === 0 || selectedTypes.every(selectedType => pokemon.types?.some(t => t.type.name === selectedType));
+          return matchesSearch && matchesTypes;
+        }).map(pokemon => {
+          const pokemonDetail = pokemonDetails[pokemon.name];
+          return (
+            <div className='border border-black bg-slate-300 my-12 mx-2 p-4 w-48 relative rounded-lg min-w-[250px] cursor-pointer hover:shadow-lg transition-shadow'
+              key={pokemon.id}
+              onClick={() => handlePokemonClick(pokemon)}
+              >
+              <img className='size-36 absolute left-0 right-0 bottom-0 top-[-100px] mx-auto'
+                src={pokemonDetail?.img || `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/${pokemon.id}.png`} alt={pokemon.name} />
+              <div className='flex flex-col justify-center items-center mt-5'>
+                <span>#{String(pokemon.id).padStart(2, '0')} - {pokemon.name.toUpperCase()}</span>
+                <div className='flex flex-row gap-2 mt-2'>
+                  <span className={`type-badge ${typeColors[pokemon.types[0].type.name]} text-white px-3 py-1 rounded-lg text-sm font-semibold uppercase border border-black shadow-sm`}>{pokemon.types[0].type.name}</span>
+                  {pokemon.types[1] && <span className={`type-badge ${typeColors[pokemon.types[1].type.name]} text-white px-3 py-1 rounded-lg text-sm font-semibold uppercase border border-black shadow-sm`}>{pokemon.types[1].type.name}</span>}
+                </div>
+              </div>
             </div>
-          </div>
-        </div>)}
-      </div>
+          );
+        })}
+        </div>
+      )}
 
       {selectedPokemon && (
         <div className='modal-overlay fixed inset-0 bg-black bg-opacity-50 z-40 transition-opacity duration-300 ease-in-out' onClick={() => setSelectedPokemon(null)}>
@@ -166,93 +227,101 @@ function App() {
               </svg>
             </button>
             
-            <header className='p-8 pt-16'>
-              <img 
-                src={selectedPokemon.img} 
-                alt={selectedPokemon.name}
-                className='w-48 h-48 mx-auto mb-6'
-              />
-              <h2 className='text-3xl font-bold text-center mb-2'>{selectedPokemon.name.toUpperCase()}</h2>
-              <p className='text-center text-gray-600 mb-6'>#{String(selectedPokemon.id).padStart(2, '0')}</p>
-            </header>
+            {loadingDetails ? (
+              <div className='flex justify-center items-center h-64'>
+                <div className='text-lg font-semibold'>Cargando detalles...</div>
+              </div>
+            ) : pokemonDetails[selectedPokemon.name] ? (
+              <>
+                <header className='p-8 pt-16'>
+                  <img 
+                    src={pokemonDetails[selectedPokemon.name].img} 
+                    alt={selectedPokemon.name}
+                    className='w-64 h-64 mx-auto mb-6'
+                  />
+                  <h2 className='text-3xl font-bold text-center mb-2'>{selectedPokemon.name.toUpperCase()}</h2>
+                  <p className='text-center text-gray-600 mb-6'>#{String(pokemonDetails[selectedPokemon.name].id).padStart(2, '0')}</p>
+                </header>
 
-            <article className='px-8 pb-8'>
-              <section className='mb-6'>
-                <h3 className='font-bold text-lg mb-2'>Descripción</h3>
-                <p className='text-sm text-gray-700 leading-relaxed'>{selectedPokemon.description}</p>
-              </section>
+                <article className='px-8 pb-8'>
+                  <section className='mb-6'>
+                    <h3 className='font-bold text-lg mb-2'>Descripción</h3>
+                    <p className='text-sm text-gray-700 leading-relaxed'>{pokemonDetails[selectedPokemon.name].description}</p>
+                  </section>
 
-              <section className='mb-6'>
-                <h3 className='font-bold text-lg mb-2'>Tipos</h3>
-                <nav className='flex gap-2 flex-wrap'>
-                  <span className={`type-badge ${typeColors[selectedPokemon.type[0].type.name]} text-white px-4 py-2 rounded-lg font-semibold uppercase border border-black`}>
-                    {selectedPokemon.type[0].type.name}
-                  </span>
-                  {selectedPokemon.type[1] && (
-                    <span className={`type-badge ${typeColors[selectedPokemon.type[1].type.name]} text-white px-4 py-2 rounded-lg font-semibold uppercase border border-black`}>
-                      {selectedPokemon.type[1].type.name}
-                    </span>
-                  )}
-                </nav>
-              </section>
+                  <section className='mb-6'>
+                    <h3 className='font-bold text-lg mb-2'>Tipos</h3>
+                    <nav className='flex gap-2 flex-wrap'>
+                      <span className={`type-badge ${typeColors[pokemonDetails[selectedPokemon.name].type[0].type.name]} text-white px-4 py-2 rounded-lg font-semibold uppercase border border-black`}>
+                        {pokemonDetails[selectedPokemon.name].type[0].type.name}
+                      </span>
+                      {pokemonDetails[selectedPokemon.name].type[1] && (
+                        <span className={`type-badge ${typeColors[pokemonDetails[selectedPokemon.name].type[1].type.name]} text-white px-4 py-2 rounded-lg font-semibold uppercase border border-black`}>
+                          {pokemonDetails[selectedPokemon.name].type[1].type.name}
+                        </span>
+                      )}
+                    </nav>
+                  </section>
 
-              <section className='mb-6'>
-                <h3 className='font-bold text-lg mb-2'>Características</h3>
-                <dl className='space-y-2'>
-                  <div className='flex justify-between'>
-                    <dt className='font-semibold'>Altura:</dt>
-                    <dd>{(selectedPokemon.height / 10).toFixed(1)} m</dd>
-                  </div>
-                  <div className='flex justify-between'>
-                    <dt className='font-semibold'>Peso:</dt>
-                    <dd>{(selectedPokemon.weight / 10).toFixed(1)} kg</dd>
-                  </div>
-                </dl>
-              </section>
-
-              <section className='mb-6'>
-                <h3 className='font-bold text-lg mb-2'>Estadísticas</h3>
-                <div className='space-y-3'>
-                  {selectedPokemon.stats.map((stat) => (
-                    <div key={stat.stat.name}>
-                      <div className='flex justify-between mb-1'>
-                        <span className='text-sm font-semibold capitalize'>{stat.stat.name}</span>
-                        <span className='text-sm font-semibold'>{stat.base_stat}</span>
+                  <section className='mb-6'>
+                    <h3 className='font-bold text-lg mb-2'>Características</h3>
+                    <dl className='space-y-2'>
+                      <div className='flex justify-between'>
+                        <dt className='font-semibold'>Altura:</dt>
+                        <dd>{(pokemonDetails[selectedPokemon.name].height / 10).toFixed(1)} m</dd>
                       </div>
-                      <div className='w-full bg-gray-200 rounded-full h-2'>
-                        <div 
-                          className='bg-blue-500 h-2 rounded-full' 
-                          style={{width: `${(stat.base_stat / 150) * 100}%`}}
-                        ></div>
+                      <div className='flex justify-between'>
+                        <dt className='font-semibold'>Peso:</dt>
+                        <dd>{(pokemonDetails[selectedPokemon.name].weight / 10).toFixed(1)} kg</dd>
                       </div>
-                    </div>
-                  ))}
-                </div>
-              </section>
+                    </dl>
+                  </section>
 
-              {selectedPokemon.evolutionChain && selectedPokemon.evolutionChain.length > 1 && (
-                <section className='mb-6'>
-                  <h3 className='font-bold text-lg mb-2'>Cadena Evolutiva</h3>
-                  <div className='flex items-center gap-1 flex-wrap justify-center'>
-                    {selectedPokemon.evolutionChain.map((pokemon, index) => (
-                      <div key={pokemon.name} className='flex items-center'>
-                        <div className='flex flex-col items-center'>
-                          <img 
-                            src={pokemon.img} 
-                            alt={pokemon.name}
-                            className='w-16 h-16'
-                          />
-                          <span className='text-xs font-semibold mt-1 uppercase'>{pokemon.name}</span>
+                  <section className='mb-6'>
+                    <h3 className='font-bold text-lg mb-2'>Estadísticas</h3>
+                    <div className='space-y-3'>
+                      {pokemonDetails[selectedPokemon.name].stats.map((stat) => (
+                        <div key={stat.stat.name}>
+                          <div className='flex justify-between mb-1'>
+                            <span className='text-sm font-semibold capitalize'>{stat.stat.name}</span>
+                            <span className='text-sm font-semibold'>{stat.base_stat}</span>
+                          </div>
+                          <div className='w-full bg-gray-200 rounded-full h-2'>
+                            <div 
+                              className='bg-blue-500 h-2 rounded-full' 
+                              style={{width: `${(stat.base_stat / 150) * 100}%`}}
+                            ></div>
+                          </div>
                         </div>
-                        {index < selectedPokemon.evolutionChain.length - 1 && (
-                          <span className='mx-2 text-xl'>→</span>
-                        )}
+                      ))}
+                    </div>
+                  </section>
+
+                  {pokemonDetails[selectedPokemon.name].evolutionChain && pokemonDetails[selectedPokemon.name].evolutionChain.length > 1 && (
+                    <section className='mb-6'>
+                      <h3 className='font-bold text-lg mb-2'>Cadena Evolutiva</h3>
+                      <div className='flex items-center gap-1 flex-wrap justify-center'>
+                        {pokemonDetails[selectedPokemon.name].evolutionChain.map((pokemon, index) => (
+                          <div key={pokemon.name} className='flex items-center'>
+                            <div className='flex flex-col items-center'>
+                              <img 
+                                src={pokemon.img} 
+                                alt={pokemon.name}
+                                className='w-16 h-16'
+                              />
+                              <span className='text-xs font-semibold mt-1 uppercase'>{pokemon.name}</span>
+                            </div>
+                            {index < pokemonDetails[selectedPokemon.name].evolutionChain.length - 1 && (
+                              <span className='mx-2 text-xl'>→</span>
+                            )}
+                          </div>
+                        ))}
                       </div>
-                    ))}
-                  </div>
-                </section>
-              )}
-            </article>
+                    </section>
+                  )}
+                </article>
+              </>
+            ) : null}
           </aside>
         </div>
       )}
