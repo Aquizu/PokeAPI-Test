@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import Logo from '../src/assets/pokeapi_256.png';
 import './App.css'
 
@@ -33,7 +33,7 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [loadingDetails, setLoadingDetails] = useState(false);
   const [pokemonDetails, setPokemonDetails] = useState({});
-  const cache = new Map();
+  const cache = useMemo(() => new Map(), []);
 
   const getPokemonDetails = useCallback(async (pokemon) => {
     if (cache.has(pokemon.name)) {
@@ -92,13 +92,13 @@ function App() {
       console.error('Error fetching pokemon details:', error);
       return null;
     }
-  }, []);
+  }, [cache]);
 
   useEffect(() => {
     const getPokemons = async () => {
       setLoading(true);
       try {
-        const res = await fetch("https://pokeapi.co/api/v2/pokemon?limit=151&offset=0");
+        const res = await fetch("https://pokeapi.co/api/v2/pokemon?limit=1000&offset=0");
         const listPokemons = await res.json();
         const { results } = listPokemons;
         
@@ -109,7 +109,8 @@ function App() {
             name: pokemon.name,
             url: pokemon.url,
             id: parseInt(pokemon.url.split('/').slice(-2, -1)[0]),
-            types: poke.types
+            types: poke.types,
+            img: poke.sprites.other.dream_world.front_default || poke.sprites.front_default
           };
         }));
         
@@ -155,11 +156,17 @@ function App() {
   // Obtener todos los tipos únicos
   const allTypes = [...new Set(pokemons.flatMap(p => p.types?.map(t => t.type.name) || []))].sort();
 
+  const filteredPokemons = pokemons.filter(pokemon => {
+    const matchesSearch = pokemon.name.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchesTypes = selectedTypes.length === 0 || selectedTypes.every(selectedType => pokemon.types?.some(t => t.type.name === selectedType));
+    return matchesSearch && matchesTypes;
+  });
+
   return (
     <div className='pokemon-background flex flex-col justify-center items-center'>
       <img className='mt-14 w-3/4 sm:w-2/3 md:w-1/2 lg:w-2/5 xl:w-1/3 h-auto' src={Logo} alt="LogoIMG" />
       <div className='mx-auto relative inline-block'>
-        <input className='border border-black rounded-lg p-2 m-20 pr-12 w-80' type="text" placeholder='Search your Pokemon here...' value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)}/>
+        <input className='border border-black rounded-lg p-3 m-4 pr-12 w-80' type="text" placeholder='Search your Pokemon here...' value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)}/>
         <button className='absolute right-6 top-1/2 transform -translate-y-1/2 bg-red-500 hover:bg-red-600 text-white p-2 rounded-lg'>
           <svg className='w-5 h-5' fill='none' stroke='currentColor' viewBox='0 0 24 24'>
             <path strokeLinecap='round' strokeLinejoin='round' strokeWidth={2} d='M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z' />
@@ -172,7 +179,7 @@ function App() {
           <button
             key={type}
             onClick={() => toggleTypeFilter(type)}
-            className={`${typeColors[type]} text-white px-4 py-2 rounded-lg text-sm font-semibold uppercase transition-all duration-200 border ${
+            className={`filter-button font-pixel ${typeColors[type]} text-white px-4 py-2 rounded-lg text-sm font-semibold uppercase transition-all duration-200 border ${
               selectedTypes.includes(type) 
                 ? 'border-black shadow-lg scale-105' 
                 : 'border-transparent hover:shadow-md'
@@ -187,22 +194,18 @@ function App() {
           <div className='text-xl font-semibold'>Cargando Pokémon...</div>
         </div>
       ) : (
+        <>
         <div className='grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 flex-wrap text-center justify-center'>
-        {pokemons.filter(pokemon => {
-          const matchesSearch = pokemon.name.toLowerCase().includes(searchTerm.toLowerCase());
-          const matchesTypes = selectedTypes.length === 0 || selectedTypes.every(selectedType => pokemon.types?.some(t => t.type.name === selectedType));
-          return matchesSearch && matchesTypes;
-        }).map(pokemon => {
-          const pokemonDetail = pokemonDetails[pokemon.name];
+        {filteredPokemons.map(pokemon => {
           return (
             <div className='border border-black bg-slate-300 my-12 mx-2 p-4 w-48 relative rounded-lg min-w-[250px] cursor-pointer hover:shadow-lg transition-shadow'
               key={pokemon.id}
               onClick={() => handlePokemonClick(pokemon)}
               >
               <img className='size-36 absolute left-0 right-0 bottom-0 top-[-100px] mx-auto'
-                src={pokemonDetail?.img || `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/${pokemon.id}.png`} alt={pokemon.name} />
+                src={pokemon.img} alt={pokemon.name} />
               <div className='flex flex-col justify-center items-center mt-5'>
-                <span>#{String(pokemon.id).padStart(2, '0')} - {pokemon.name.toUpperCase()}</span>
+                <span className='font-pixel mt-4'>#{String(pokemon.id).padStart(2, '0')} - {pokemon.name.toUpperCase()}</span>
                 <div className='flex flex-row gap-2 mt-2'>
                   <span className={`type-badge ${typeColors[pokemon.types[0].type.name]} text-white px-3 py-1 rounded-lg text-sm font-semibold uppercase border border-black shadow-sm`}>{pokemon.types[0].type.name}</span>
                   {pokemon.types[1] && <span className={`type-badge ${typeColors[pokemon.types[1].type.name]} text-white px-3 py-1 rounded-lg text-sm font-semibold uppercase border border-black shadow-sm`}>{pokemon.types[1].type.name}</span>}
@@ -212,6 +215,10 @@ function App() {
           );
         })}
         </div>
+        {filteredPokemons.length === 0 && !loading && (
+          <div className='text-center text-lg font-semibold mt-8'>No se encontró ningún Pokémon</div>
+        )}
+        </>
       )}
 
       {selectedPokemon && (
@@ -239,7 +246,7 @@ function App() {
                     alt={selectedPokemon.name}
                     className='w-64 h-64 mx-auto mb-6'
                   />
-                  <h2 className='text-3xl font-bold text-center mb-2'>{selectedPokemon.name.toUpperCase()}</h2>
+                  <h2 className='text-3xl font-bold text-center mb-2 font-pixel'>{selectedPokemon.name.toUpperCase()}</h2>
                   <p className='text-center text-gray-600 mb-6'>#{String(pokemonDetails[selectedPokemon.name].id).padStart(2, '0')}</p>
                 </header>
 
@@ -309,7 +316,7 @@ function App() {
                                 alt={pokemon.name}
                                 className='w-16 h-16'
                               />
-                              <span className='text-xs font-semibold mt-1 uppercase'>{pokemon.name}</span>
+                              <span className='text-xs font-semibold mt-1 uppercase font-pixel'>{pokemon.name}</span>
                             </div>
                             {index < pokemonDetails[selectedPokemon.name].evolutionChain.length - 1 && (
                               <span className='mx-2 text-xl'>→</span>

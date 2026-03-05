@@ -95,6 +95,16 @@ aside.closing {
 
 /* Estilos para los badges de tipo */
 .type-badge {
+  font-family: 'Silkscreen', display;
+  text-shadow: 
+    -1px -1px 0 rgba(0, 0, 0, 0.8),
+    1px -1px 0 rgba(0, 0, 0, 0.8),
+    -1px 1px 0 rgba(0, 0, 0, 0.8),
+    1px 1px 0 rgba(0, 0, 0, 0.8);
+}
+
+/* Estilos para los botones de filtro */
+.filter-button {
   text-shadow: 
     -1px -1px 0 rgba(0, 0, 0, 0.8),
     1px -1px 0 rgba(0, 0, 0, 0.8),
